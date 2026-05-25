@@ -128,7 +128,7 @@ Notebook: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) — GitHub plot'lar
 
 **2. KAP bildirim zamanlaması (event study tasarımını şekillendirir):** Toplam 232 bildirimin **%81.5'i işlem saatleri dışında** yayınlanıyor (kapanış sonrası ağırlıklı). Bu, event study'de **t+1d (ertesi açılış gap) pencerenin baskın kanal** olacağı anlamına gelir; t±Nh kısa pencere ikincil rolde.
 
-**3. Volatilite & otokorelasyon:** Saatlik vol %0.68–0.87 aralığında (yıllıklandırılmış %32–%41). 1-bar ACF tüm hisseler için ~0 ila −0.07 — hafif mean-reversion, etkin pazara yakın. Abnormal getiri için sabit ortalama bazlı bir baz model yeterli olabilir (pazar modeli zorunlu değil).
+**3. Volatilite & otokorelasyon:** Saatlik vol %0.68–0.87 aralığında (yıllıklandırılmış %32–%41). 1-bar ACF tüm hisseler için `|≤0.07|` sınırı içinde (KCHOL −0.066 en negatif, ASELS +0.008 hafif pozitif) — etkin pazara yakın, hafif mean-reversion eğilimi. Abnormal getiri için sabit ortalama bazlı bir baz model yeterli olabilir (pazar modeli zorunlu değil).
 
 ## Yol Haritası
 
