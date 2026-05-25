@@ -121,10 +121,10 @@ Pragmatik çözüm: PyPI'da [`pykap`](https://github.com/cemsinano/pykap) paketi
 
 Notebook: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) — GitHub plot'ları ve tabloları inline render eder.
 
-**1. yfinance bar etiketi — varsayımdan veriye:** BIST sürekli işlemi 10:00–18:00, fakat Yahoo veriyi UTC etiketli verdiği ve `tz_convert("Europe/Istanbul")` 3 saat geri kaydırdığı için yfinance saatlik bar etiketleri Istanbul'da **09:00–17:00** görünür. Günde 9 bar (1118 satır / 125 işgün = 8.94 doğrulandı). Bar–seans eşlemesi:
-- `09:00` → pre-opening (09:40–10:00)
-- `10:00..16:00` → sürekli işlem saatleri
-- `17:00` → 17:00–18:00 + kapanış müzayedesi (18:00–18:10) + nihai kapanış (~18:15) hepsi bu bar'ın `Close`'unda
+**1. yfinance bar etiketi — varsayımdan veriye:** BIST sürekli işlemi 10:00–18:00, fakat yfinance saatlik bar etiketleri Istanbul'da **09:30–17:30** olarak gelir (her saatin 30. dakikasında, Yahoo'nun UTC-bazlı bar etiketlemesinin sonucu). Günde 9 bar (1118 satır / 125 işgün = 8.94 doğrulandı). Bar kapsamı `[start, start+1h)`:
+- `09:30` bar → 09:30–10:30: pre-opening (09:40–10:00) + ilk 30 dk sürekli işlem
+- `10:30..16:30` → sürekli işlem saatleri
+- `17:30` bar → 17:30–18:30: son 30 dk işlem + kapanış müzayedesi (18:00–18:10) + nihai kapanış (~18:15) hepsi bu bar'ın `Close`'unda
 
 **2. KAP bildirim zamanlaması (event study tasarımını şekillendirir):** Toplam 232 bildirimin **%81.5'i işlem saatleri dışında** yayınlanıyor (kapanış sonrası ağırlıklı). Bu, event study'de **t+1d (ertesi açılış gap) pencerenin baskın kanal** olacağı anlamına gelir; t±Nh kısa pencere ikincil rolde.
 
