@@ -31,7 +31,8 @@ Tarih aralığı: 2025-11-24 → 2026-05-22 (son işlem günü).
 | Fiyat | yfinance |
 | Haber | pykap (KAP API wrapper) |
 | NLP | HuggingFace Transformers (Türkçe BERT) — *planlı* |
-| Görsel | plotly, streamlit — *planlı* |
+| İstatistik | scipy (t-test, sign test) |
+| Görsel | matplotlib, seaborn (notebook); plotly/streamlit *planlı* |
 | Test | pytest |
 
 ## Dizin Yapısı
@@ -49,10 +50,12 @@ bist-news-impact/
 │   │   ├── price_fetcher.py # yfinance → parquet
 │   │   └── kap_scraper.py   # KAP ÖDA → JSONL
 │   └── analysis/
-│       └── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
-├── tests/                   # 16 birim test
+│       ├── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
+│       └── event_study.py   # Pencereleme + AR/CAR (sabit ortalama baseline)
+├── tests/                   # 26 birim test
 ├── notebooks/
-│   └── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
+│   ├── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
+│   └── 02_event_study.ipynb # Event study (6 bölüm, t-test/sign test)
 ├── requirements.txt
 └── README.md
 ```
@@ -81,6 +84,9 @@ pytest tests/ -v
 
 # EDA notebook'unu aç (jupyter veya VS Code)
 jupyter notebook notebooks/01_eda.ipynb
+
+# Event study notebook'unu aç
+jupyter notebook notebooks/02_event_study.ipynb
 ```
 
 ## KAP Veri Toplama — Mühendislik Notu
@@ -130,23 +136,56 @@ Notebook: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) — GitHub plot'lar
 
 **3. Volatilite & otokorelasyon:** Saatlik vol %0.68–0.87 aralığında (yıllıklandırılmış %32–%41). 1-bar ACF tüm hisseler için `|≤0.07|` sınırı içinde (KCHOL −0.066 en negatif, ASELS +0.008 hafif pozitif) — etkin pazara yakın, hafif mean-reversion eğilimi. Abnormal getiri için sabit ortalama bazlı bir baz model yeterli olabilir (pazar modeli zorunlu değil).
 
+## Event Study Bulguları
+
+Notebook: [`notebooks/02_event_study.ipynb`](notebooks/02_event_study.ipynb). Pencere: `t-1..t+3` saatlik bar (toplam 5 bar). Baseline: olay öncesi 60 bar sabit ortalama (EDA bulgusuna göre pazar modeli gereksiz). **221/232 olay analiz edildi** — 9 olay yetersiz veri, 2 olay data sınırı dışı (%95.3 kapsama).
+
+**1. Toplu CAR anlamlı değil, ama alt-grupta çok anlamlı:** 221 olay birleşik tek-örnek t-testi `t = 1.09, p = 0.28` — yani "KAP bildirimi → CAR ≠ 0" toplu olarak doğrulanmıyor. Ancak **zamanlama alt-grupları kuvvetli ayrışıyor**.
+
+**2. ⭐ Aynı-gün vs Ertesi-gün bar map'i (kuvvetli bulgu):**
+
+| Timing | n | Ort CAR | Std |
+|---|---|---|---|
+| Aynı-gün bar map | 153 | **−0.14%** | 1.72% |
+| Ertesi-gün bar map | 68 | **+0.76%** | 1.98% |
+
+**Welch iki-örnek t-test: `t = −3.23, p = 0.0016`** (≪ 0.01, çok anlamlı). EDA'daki "%81.5 dışarıda" bulgusunun arka tarafı: kapanış-sonrası bildirimler (ertesi-gün maps) **anlamlı pozitif tepki** alıyor; aynı-gün rutin bildirimler **hafif negatif**. İktisadi yorum: kapanış sonrası yapılan duyurular tipik olarak "ağır" haber (rating güncellemeleri, sermaye işlemleri, M&A) — pazar açılışında pozitif fiyatlama.
+
+**3. Hisse bazında p-değerleri:**
+
+| Hisse | n | Ort CAR % | t-test p | Pozitif oranı | Sign test p |
+|---|---|---|---|---|---|
+| THYAO | 28 | +0.28 | 0.48 | 57% | 0.57 |
+| ASELS | 19 | +0.43 | 0.32 | 47% | 1.00 |
+| GARAN | 111 | −0.09 | 0.64 | 47% | 0.57 |
+| KCHOL | 41 | +0.43 | **0.055** | 56% | 0.53 |
+| EREGL | 22 | +0.26 | 0.52 | **82%** | **0.0043** |
+| **ALL** | 221 | +0.13 | 0.28 | 53% | 0.35 |
+
+- **EREGL:** olayların %82'si pozitif yönlü tepki (sign test p = 0.0043, çok anlamlı). Büyüklük değişken olduğu için t-testte görünmüyor; **yön tutarlılığı** net.
+- **KCHOL:** marjinal anlamlı (t-test p = 0.055), pozitif eğilim.
+- **GARAN:** 111 olay (en büyük örneklem) — etki yok, çoğu rutin bildirim.
+
+**4. Sonraki adım için ipuçları:** Sentiment skorlama eklendiğinde "pozitif-skorlu × ertesi-gün maps" alt-grubu büyük olasılıkla en güçlü sinyali verir. Geniş pencere (t+1d, t+5d) ve BIST100 baz model ek doğrulama için denenebilir.
+
 ## Yol Haritası
 
 - [x] **Fiyat toplama** — yfinance, 5 hisse × 6 ay saatlik
 - [x] **KAP haber toplama** — ÖDA bildirimleri, 5 hisse × 6 ay (232 bildirim)
-- [x] **Birim testler** — 16 test, ağ çağrısı içermez
+- [x] **Birim testler** — 26 test, ağ çağrısı içermez
 - [x] **EDA notebook** — getiri dağılımı, volatilite, KAP yoğunluğu, fiyat × haber timeline
+- [x] **Event study** — `t-1..t+3` pencere, sabit ortalama baseline, AR/CAR + istatistiksel anlamlılık
 - [ ] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite
-- [ ] **Event study** — t±1h, t+1d pencereleri, abnormal getiri
 - [ ] **Streamlit dashboard** — hisse seç → olay zaman çizgisi + getiri grafiği
 
 ## Test Durumu
 
 ```
-16 passed in ~6s
+26 passed in ~1s
 - tests/test_price_fetcher.py  (4 test)
 - tests/test_kap_scraper.py    (6 test)
 - tests/test_loaders.py        (6 test)
+- tests/test_event_study.py    (10 test)
 ```
 
 ## Lisans

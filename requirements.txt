@@ -14,8 +14,9 @@ streamlit>=1.30
 pytest>=7.4
 python-dateutil>=2.8
 
-# Notebook / EDA
+# Notebook / EDA / istatistik
 jupyter>=1.0
 ipykernel>=6.29
 matplotlib>=3.8
 seaborn>=0.13
+scipy>=1.11
