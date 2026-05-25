@@ -45,11 +45,14 @@ bist-news-impact/
 │   └── processed/           # İşlenmiş veri (planlı)
 ├── src/
 │   ├── config.py            # TICKERS, BIST_TIMEZONE, dizin yolları
-│   └── data/
-│       ├── price_fetcher.py # yfinance → parquet
-│       └── kap_scraper.py   # KAP ÖDA → JSONL
-├── tests/                   # 10 birim test
-├── notebooks/               # EDA (planlı)
+│   ├── data/
+│   │   ├── price_fetcher.py # yfinance → parquet
+│   │   └── kap_scraper.py   # KAP ÖDA → JSONL
+│   └── analysis/
+│       └── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
+├── tests/                   # 16 birim test
+├── notebooks/
+│   └── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
 ├── requirements.txt
 └── README.md
 ```
@@ -75,6 +78,9 @@ python -m src.data.kap_scraper
 
 # Testleri çalıştır
 pytest tests/ -v
+
+# EDA notebook'unu aç (jupyter veya VS Code)
+jupyter notebook notebooks/01_eda.ipynb
 ```
 
 ## KAP Veri Toplama — Mühendislik Notu
@@ -111,22 +117,36 @@ Pragmatik çözüm: PyPI'da [`pykap`](https://github.com/cemsinano/pykap) paketi
 }
 ```
 
+## EDA Bulguları
+
+Notebook: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) — GitHub plot'ları ve tabloları inline render eder.
+
+**1. yfinance bar etiketi — varsayımdan veriye:** BIST sürekli işlemi 10:00–18:00, fakat Yahoo veriyi UTC etiketli verdiği ve `tz_convert("Europe/Istanbul")` 3 saat geri kaydırdığı için yfinance saatlik bar etiketleri Istanbul'da **09:00–17:00** görünür. Günde 9 bar (1118 satır / 125 işgün = 8.94 doğrulandı). Bar–seans eşlemesi:
+- `09:00` → pre-opening (09:40–10:00)
+- `10:00..16:00` → sürekli işlem saatleri
+- `17:00` → 17:00–18:00 + kapanış müzayedesi (18:00–18:10) + nihai kapanış (~18:15) hepsi bu bar'ın `Close`'unda
+
+**2. KAP bildirim zamanlaması (event study tasarımını şekillendirir):** Toplam 232 bildirimin **%81.5'i işlem saatleri dışında** yayınlanıyor (kapanış sonrası ağırlıklı). Bu, event study'de **t+1d (ertesi açılış gap) pencerenin baskın kanal** olacağı anlamına gelir; t±Nh kısa pencere ikincil rolde.
+
+**3. Volatilite & otokorelasyon:** Saatlik vol %0.68–0.87 aralığında (yıllıklandırılmış %32–%41). 1-bar ACF tüm hisseler için ~0 ila −0.07 — hafif mean-reversion, etkin pazara yakın. Abnormal getiri için sabit ortalama bazlı bir baz model yeterli olabilir (pazar modeli zorunlu değil).
+
 ## Yol Haritası
 
 - [x] **Fiyat toplama** — yfinance, 5 hisse × 6 ay saatlik
 - [x] **KAP haber toplama** — ÖDA bildirimleri, 5 hisse × 6 ay (232 bildirim)
-- [x] **Birim testler** — 10 test, ağ çağrısı içermez
+- [x] **Birim testler** — 16 test, ağ çağrısı içermez
+- [x] **EDA notebook** — getiri dağılımı, volatilite, KAP yoğunluğu, fiyat × haber timeline
 - [ ] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite
 - [ ] **Event study** — t±1h, t+1d pencereleri, abnormal getiri
-- [ ] **EDA notebook** — getiri dağılımı, volatilite, missing data
 - [ ] **Streamlit dashboard** — hisse seç → olay zaman çizgisi + getiri grafiği
 
 ## Test Durumu
 
 ```
-10 passed in 1.02s
+16 passed in ~6s
 - tests/test_price_fetcher.py  (4 test)
 - tests/test_kap_scraper.py    (6 test)
+- tests/test_loaders.py        (6 test)
 ```
 
 ## Lisans
