@@ -53,6 +53,8 @@ bist-news-impact/
 │       ├── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
 │       ├── event_study.py   # Pencereleme + AR/CAR (sabit ortalama baseline)
 │       └── sentiment.py     # Türkçe BERT pipeline (savasy/bert-base-turkish-sentiment-cased)
+├── app/
+│   └── dashboard.py         # Streamlit dashboard (fiyat + KAP timeline + event study)
 ├── scripts/
 │   └── score_sentiment.py   # KAP bildirimlerini skorla → data/processed/sentiment.parquet
 ├── tests/                   # 35 birim test
@@ -60,6 +62,8 @@ bist-news-impact/
 │   ├── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
 │   ├── 02_event_study.ipynb # Event study (6 bölüm, t-test/sign test)
 │   └── 03_sentiment.ipynb   # Sentiment × CAR (6 bölüm, 2×2 alt-grup testi)
+├── docs/
+│   └── dashboard.png        # Dashboard ekran goruntusu (README)
 ├── requirements.txt
 └── README.md
 ```
@@ -97,6 +101,9 @@ python -m scripts.score_sentiment
 
 # Sentiment notebook'unu aç
 jupyter notebook notebooks/03_sentiment.ipynb
+
+# Streamlit dashboard'u ayağa kaldır (http://localhost:8501)
+streamlit run app/dashboard.py
 ```
 
 > **Not:** PyTorch CPU sürümü için (`~200 MB`, GPU sürümünden ~10× küçük):
@@ -212,6 +219,22 @@ Hipotez: "pozitif × ertesi-gün" en güçlü sinyal olmalı. **Gerçek: "negati
 
 **4. Çıkarım:** Genel-amaçlı Türkçe BERT sentiment, KAP ÖDA gibi yapılandırılmış finansal duyuru dili için yetersiz. Anlamlı sentiment sinyali için ya (a) finansal Türkçe corpus üzerinde fine-tune'lu bir model, ya da (b) bildirim **kategorisine** (`disclosure_category`) bağlı kural-bazlı bir yaklaşım (örn. "kar payı dağıtımı" = pozitif, "esas sözleşme değişikliği" = nötr) daha verimli olur. Bu null-result'un kendisi proje için kıymetli: domain-specific NLP gerekliliğini ampirik olarak gösterir.
 
+## Streamlit Dashboard
+
+`streamlit run app/dashboard.py` → http://localhost:8501
+
+![Dashboard ekran görüntüsü](docs/dashboard.png)
+
+Tüm analiz sonuçlarının (fiyat + KAP + sentiment + event study) tek sayfada interaktif sunumu:
+
+- **Sidebar:** hisse seçici, tarih aralığı, sentiment label filtresi
+- **Üst metrikler:** olay sayısı, ortalama CAR%, pozitif CAR oranı, pozitif sentiment %
+- **Fiyat grafiği:** Close çizgisi + KAP olay marker'ları (yeşil pozitif / kırmızı negatif sentiment; hover'da subject + summary + CAR%)
+- **CAR dağılım:** sentiment bazında histogram + sortable olay tablosu
+- **2×2 ısı haritası:** seçili hissenin Sentiment × Timing × ortalama CAR matrisi
+
+Veri akışı: tüm yüklemeler `@st.cache_data` ile önbelleğe alınır (event study + KAP load ~3 sn ilk açılışta, sonra anlık). Sentiment skorları varsa otomatik join'lenir; yoksa "n/a" olarak gösterilir ve script ipucu verilir.
+
 ## Yol Haritası
 
 - [x] **Fiyat toplama** — yfinance, 5 hisse × 6 ay saatlik
@@ -220,7 +243,7 @@ Hipotez: "pozitif × ertesi-gün" en güçlü sinyal olmalı. **Gerçek: "negati
 - [x] **EDA notebook** — getiri dağılımı, volatilite, KAP yoğunluğu, fiyat × haber timeline
 - [x] **Event study** — `t-1..t+3` pencere, sabit ortalama baseline, AR/CAR + istatistiksel anlamlılık
 - [x] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite (savasy modeli, null-result: domain mismatch tespit edildi)
-- [ ] **Streamlit dashboard** — hisse seç → olay zaman çizgisi + getiri grafiği
+- [x] **Streamlit dashboard** — fiyat + KAP timeline + sentiment + event study tek sayfada
 - [ ] **Domain-specific sentiment** — disclosure_category bazlı kural seti veya finansal Türkçe fine-tune'lu model
 
 ## Test Durumu
