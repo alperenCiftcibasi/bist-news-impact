@@ -12,7 +12,7 @@ BIST hisseleri için **KAP Özel Durum Açıklamalarının** kısa vadeli fiyat 
 | Dönem | Son 6 ay |
 | Fiyat granülaritesi | Saatlik (1h) |
 | Haber kaynağı | KAP — Özel Durum Açıklamaları (ÖDA) |
-| Sentiment modeli | `savasy/bert-base-turkish-sentiment-cased` (planlı) |
+| Sentiment modeli | `savasy/bert-base-turkish-sentiment-cased` |
 
 ## Mevcut Veri
 
@@ -30,7 +30,7 @@ Tarih aralığı: 2025-11-24 → 2026-05-22 (son işlem günü).
 | Veri işleme | pandas, numpy |
 | Fiyat | yfinance |
 | Haber | pykap (KAP API wrapper) |
-| NLP | HuggingFace Transformers (Türkçe BERT) — *planlı* |
+| NLP | HuggingFace Transformers (Türkçe BERT) |
 | İstatistik | scipy (t-test, sign test) |
 | Görsel | matplotlib, seaborn (notebook); plotly/streamlit *planlı* |
 | Test | pytest |
@@ -51,11 +51,15 @@ bist-news-impact/
 │   │   └── kap_scraper.py   # KAP ÖDA → JSONL
 │   └── analysis/
 │       ├── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
-│       └── event_study.py   # Pencereleme + AR/CAR (sabit ortalama baseline)
-├── tests/                   # 26 birim test
+│       ├── event_study.py   # Pencereleme + AR/CAR (sabit ortalama baseline)
+│       └── sentiment.py     # Türkçe BERT pipeline (savasy/bert-base-turkish-sentiment-cased)
+├── scripts/
+│   └── score_sentiment.py   # KAP bildirimlerini skorla → data/processed/sentiment.parquet
+├── tests/                   # 35 birim test
 ├── notebooks/
 │   ├── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
-│   └── 02_event_study.ipynb # Event study (6 bölüm, t-test/sign test)
+│   ├── 02_event_study.ipynb # Event study (6 bölüm, t-test/sign test)
+│   └── 03_sentiment.ipynb   # Sentiment × CAR (6 bölüm, 2×2 alt-grup testi)
 ├── requirements.txt
 └── README.md
 ```
@@ -87,7 +91,16 @@ jupyter notebook notebooks/01_eda.ipynb
 
 # Event study notebook'unu aç
 jupyter notebook notebooks/02_event_study.ipynb
+
+# KAP bildirimlerini sentiment'le skorla
+python -m scripts.score_sentiment
+
+# Sentiment notebook'unu aç
+jupyter notebook notebooks/03_sentiment.ipynb
 ```
+
+> **Not:** PyTorch CPU sürümü için (`~200 MB`, GPU sürümünden ~10× küçük):
+> `pip install --index-url https://download.pytorch.org/whl/cpu torch`
 
 ## KAP Veri Toplama — Mühendislik Notu
 
@@ -168,6 +181,37 @@ Notebook: [`notebooks/02_event_study.ipynb`](notebooks/02_event_study.ipynb). Pe
 
 **4. Sonraki adım için ipuçları:** Sentiment skorlama eklendiğinde "pozitif-skorlu × ertesi-gün maps" alt-grubu büyük olasılıkla en güçlü sinyali verir. Geniş pencere (t+1d, t+5d) ve BIST100 baz model ek doğrulama için denenebilir.
 
+## Sentiment Bulguları
+
+Notebook: [`notebooks/03_sentiment.ipynb`](notebooks/03_sentiment.ipynb). Model: `savasy/bert-base-turkish-sentiment-cased` (HuggingFace, binary positive/negative). 232 KAP bildirimi `summary` metni üzerinden skorlandı (~9 sn CPU). Sonuç `data/processed/sentiment.parquet`'te.
+
+**Label dağılımı dengeli:** 117 pozitif / 115 negatif. Hisse bazında ASELS ve THYAO pozitif-ağırlıklı (16/23, 17/28); KCHOL hafif negatif-ağırlıklı (26/44); GARAN ve EREGL dengeli.
+
+**1. Sentiment CAR'ı predict etmiyor — hatta hafif ters yön:**
+
+| Sentiment | n | Ort CAR % | Std % |
+|---|---|---|---|
+| Negative | 112 | **+0.27** | 1.78 |
+| Positive | 109 | **−0.01** | 1.91 |
+
+Welch t-test: t = −1.12, p = 0.26 (anlamlı değil, **ama yön beklediğimizin tersi**).
+
+**2. ⭐ Anahtar hipotez çürütüldü — sentiment × timing 2×2:**
+
+| | Aynı-gün | Ertesi-gün |
+|---|---|---|
+| Negative | −0.05% (n=75) | **+0.93% (n=37)** |
+| Positive | −0.22% (n=78) | +0.54% (n=31) |
+
+Hipotez: "pozitif × ertesi-gün" en güçlü sinyal olmalı. **Gerçek: "negatif × ertesi-gün" hücresi en yüksek ortalama CAR'a (+0.93%) sahip.** Pozitif × ertesi-gün vs diğer 3 hücre Welch t-test: t = 1.11, p = 0.275 (anlamsız). Yani sentiment etiketinin sinyal kalitesini iyileştirmediğini söyleyebiliriz — **timing tek başına baskın faktör**.
+
+**3. Neden çalışmadı — model domain mismatch:** En yüksek güvenle skorlanan örnek bildirimlere bakınca model davranışı netleşiyor:
+
+- **Pozitif (skor ≥0.99) olarak işaretlenenler:** "Fitch Ratings kredi derecelendirme notları" — model "kredi", "not" gibi kelimeleri pozitif okuyor ama bildirimin yönü (not ↑ mı ↓ mı) içerikten okunmuyor.
+- **Negatif (skor ≥0.99) olarak işaretlenenler:** "Üst yönetim değişikliği", "2025 Yılı Kar Dağıtımı", "Tahsili gecikmiş alacak portföy satışı" — bu üç başlık bile finansal bağlamda **nötr veya pozitif** (kar dağıtımı yatırımcı için pozitif; takipteki kredi satışı bilanço temizliği). Model genel-amaçlı ürün yorumu/sosyal medya dilinde eğitildi; "değişiklik", "gecikmiş", "kar" gibi terimleri finansal değil günlük dil anlamıyla işliyor.
+
+**4. Çıkarım:** Genel-amaçlı Türkçe BERT sentiment, KAP ÖDA gibi yapılandırılmış finansal duyuru dili için yetersiz. Anlamlı sentiment sinyali için ya (a) finansal Türkçe corpus üzerinde fine-tune'lu bir model, ya da (b) bildirim **kategorisine** (`disclosure_category`) bağlı kural-bazlı bir yaklaşım (örn. "kar payı dağıtımı" = pozitif, "esas sözleşme değişikliği" = nötr) daha verimli olur. Bu null-result'un kendisi proje için kıymetli: domain-specific NLP gerekliliğini ampirik olarak gösterir.
+
 ## Yol Haritası
 
 - [x] **Fiyat toplama** — yfinance, 5 hisse × 6 ay saatlik
@@ -175,17 +219,19 @@ Notebook: [`notebooks/02_event_study.ipynb`](notebooks/02_event_study.ipynb). Pe
 - [x] **Birim testler** — 26 test, ağ çağrısı içermez
 - [x] **EDA notebook** — getiri dağılımı, volatilite, KAP yoğunluğu, fiyat × haber timeline
 - [x] **Event study** — `t-1..t+3` pencere, sabit ortalama baseline, AR/CAR + istatistiksel anlamlılık
-- [ ] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite
+- [x] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite (savasy modeli, null-result: domain mismatch tespit edildi)
 - [ ] **Streamlit dashboard** — hisse seç → olay zaman çizgisi + getiri grafiği
+- [ ] **Domain-specific sentiment** — disclosure_category bazlı kural seti veya finansal Türkçe fine-tune'lu model
 
 ## Test Durumu
 
 ```
-26 passed in ~1s
+35 passed in ~4s
 - tests/test_price_fetcher.py  (4 test)
 - tests/test_kap_scraper.py    (6 test)
 - tests/test_loaders.py        (6 test)
 - tests/test_event_study.py    (10 test)
+- tests/test_sentiment.py      (9 test, model mock'lu)
 ```
 
 ## Lisans
