@@ -52,7 +52,8 @@ bist-news-impact/
 │   └── analysis/
 │       ├── loaders.py       # Parquet/JSONL → DataFrame (notebook + analiz ortak)
 │       ├── event_study.py   # Pencereleme + AR/CAR (sabit ortalama baseline)
-│       └── sentiment.py     # Türkçe BERT pipeline (savasy/bert-base-turkish-sentiment-cased)
+│       ├── sentiment.py     # Türkçe BERT pipeline (savasy/bert-base-turkish-sentiment-cased)
+│       └── rule_sentiment.py # Subject-bazlı deterministik sınıflandırma
 ├── app/
 │   └── dashboard.py         # Streamlit dashboard (fiyat + KAP timeline + event study)
 ├── scripts/
@@ -61,7 +62,8 @@ bist-news-impact/
 ├── notebooks/
 │   ├── 01_eda.ipynb         # Keşifsel veri analizi (5 bölüm)
 │   ├── 02_event_study.ipynb # Event study (6 bölüm, t-test/sign test)
-│   └── 03_sentiment.ipynb   # Sentiment × CAR (6 bölüm, 2×2 alt-grup testi)
+│   ├── 03_sentiment.ipynb   # BERT sentiment × CAR (6 bölüm, 2×2 alt-grup testi)
+│   └── 04_rule_sentiment.ipynb # Rule-based sentiment + BERT vs Rule karşılaştırma
 ├── docs/
 │   └── dashboard.png        # Dashboard ekran goruntusu (README)
 ├── requirements.txt
@@ -217,7 +219,55 @@ Hipotez: "pozitif × ertesi-gün" en güçlü sinyal olmalı. **Gerçek: "negati
 - **Pozitif (skor ≥0.99) olarak işaretlenenler:** "Fitch Ratings kredi derecelendirme notları" — model "kredi", "not" gibi kelimeleri pozitif okuyor ama bildirimin yönü (not ↑ mı ↓ mı) içerikten okunmuyor.
 - **Negatif (skor ≥0.99) olarak işaretlenenler:** "Üst yönetim değişikliği", "2025 Yılı Kar Dağıtımı", "Tahsili gecikmiş alacak portföy satışı" — bu üç başlık bile finansal bağlamda **nötr veya pozitif** (kar dağıtımı yatırımcı için pozitif; takipteki kredi satışı bilanço temizliği). Model genel-amaçlı ürün yorumu/sosyal medya dilinde eğitildi; "değişiklik", "gecikmiş", "kar" gibi terimleri finansal değil günlük dil anlamıyla işliyor.
 
-**4. Çıkarım:** Genel-amaçlı Türkçe BERT sentiment, KAP ÖDA gibi yapılandırılmış finansal duyuru dili için yetersiz. Anlamlı sentiment sinyali için ya (a) finansal Türkçe corpus üzerinde fine-tune'lu bir model, ya da (b) bildirim **kategorisine** (`disclosure_category`) bağlı kural-bazlı bir yaklaşım (örn. "kar payı dağıtımı" = pozitif, "esas sözleşme değişikliği" = nötr) daha verimli olur. Bu null-result'un kendisi proje için kıymetli: domain-specific NLP gerekliliğini ampirik olarak gösterir.
+**4. Çıkarım:** Genel-amaçlı Türkçe BERT sentiment, KAP ÖDA gibi yapılandırılmış finansal duyuru dili için yetersiz. Anlamlı sentiment sinyali için ya (a) finansal Türkçe corpus üzerinde fine-tune'lu bir model, ya da (b) bildirim **kategorisine** (`disclosure_category`) bağlı kural-bazlı bir yaklaşım (örn. "kar payı dağıtımı" = pozitif, "esas sözleşme değişikliği" = nötr) daha verimli olur. Bu null-result'un kendisi proje için kıymetli: domain-specific NLP gerekliliğini ampirik olarak gösterir. **Sonraki bölüm (b) yaklaşımını uyguluyor.**
+
+## Kural-Bazlı Sentiment ve Karşılaştırma
+
+Notebook: [`notebooks/04_rule_sentiment.ipynb`](notebooks/04_rule_sentiment.ipynb). Modül: `src/analysis/rule_sentiment.py`. 20 farklı KAP `subject` üzerinden deterministik sınıflandırma:
+
+- **Sabit POZ** (4 subject, 28 olay): Kar Payı Dağıtımı, Payların Geri Alınması, Yeni İş İlişkisi, Finansal Duran Varlık Edinimi
+- **Sabit NEG** (1 subject, çoğunlukla 0 olay veri setinde): Finansal Duran Varlık Satışı
+- **Keyword-bazlı** (3 subject, `summary`'e bakar):
+  - Sermaye Artırımı/Azaltımı: "artırım" → NEG (dilution), "azaltım" → POZ
+  - Pay Alım Satım: "satış/satım" → NEG (insider sell), "alım/alış" → POZ
+  - Kredi Derecelendirmesi: "yukarı/yükseltil" → POZ, "düşürül/aşağı" → NEG
+- **Sabit NÖT** (12 subject, çoğunluk): Genel Kurul, İhraç Tavanı, Bağımsız Denetim, vb.
+- **Bilinmeyen subject** → NÖT (güvenli default, gelecek kategoriler için)
+
+**Veri setindeki dağılım (221 OK olay):**
+
+| Rule label | n | Ort. CAR % |
+|---|---|---|
+| positive | 28 | +0.17 |
+| neutral | 180 | +0.11 |
+| negative | 13 | +0.35 |
+
+Negative örnekleminin tamamı KCHOL'un Tahsisli Sermaye Artırımı + Pay Satışı sürecinin 13 aşaması — tek olayın çoklu bildirimi. Bu küçük örneklemde tesadüfen pozitif CAR'a denk gelmiş (Welch pos-neg p=0.74, anlamsız).
+
+**Rule × Timing 2×3 ızgarası:**
+
+| | Aynı-gün | Ertesi-gün |
+|---|---|---|
+| Negative | −0.26% (n=7) | +1.06% (n=6) |
+| Neutral | −0.11% (n=128) | +0.67% (n=52) |
+| Positive | −0.29% (n=18) | **+1.01% (n=10)** |
+
+**⭐ Pozitif × ertesi-gün alt-grubunda 10 olayın 9'u pozitif CAR — sign test p=0.0215.** Örneklem küçük (n=10) olduğu için Welch t-test marjinal (p=0.26), ama yön tutarlılığı dikkate değer.
+
+**BERT vs Rule — karşılaştırma:**
+
+| Yöntem | n pos | n neg | pos ort % | neg ort % | Welch p |
+|---|---|---|---|---|---|
+| BERT (savasy) | 109 | 112 | −0.01 | +0.27 | 0.26 |
+| Rule | 28 | 13 | +0.17 | +0.35 | 0.74 |
+
+İki yöntem **Cohen's kappa = −0.007** — rastgele uyumun bile altında, neredeyse bağımsız sınıflandırma yapıyorlar.
+
+**Disagreement örnekleri (BERT'in ne tür bildirimleri yanlış sınıfladığı):**
+- BERT pos + Rule neg (4 olay): hepsi KCHOL'un sermaye artırımı/pay satışı süreci. BERT "tamamlandı/yetkilendirme" gibi terimleri pozitif okuyor.
+- BERT neg + Rule pos (18 olay): "Kar Payı Dağıtımı", "Geri Alım", "Yeni İş İlişkisi" başlıklarını BERT yanlış sınıflandırıyor — finansal dil ile günlük dil ayrışması net.
+
+**Final çıkarım:** Rule-based yaklaşım yorumlanabilirlik açısından üstün, küçük alt-gruplarda (pos+ertesi-gün) yön tutarlılığı veriyor (sign test p=0.02), ama ortalama CAR farkı seviyesinde anlamlı sinyal yok. Hem BERT hem rule yöntemiyle ulaşılan sonuç, 5 hisse × 6 ay'lık örneklemde **etkin pazar hipotezine** yakın bir bulgu: KAP bildirimleri sistematik bir CAR sinyali üretmiyor; etki büyük ölçüde **timing (kapanış sonrası → ertesi açılış gap)** kanalı üzerinden, sentiment yönünden bağımsız olarak gerçekleşiyor.
 
 ## Streamlit Dashboard
 
@@ -244,17 +294,18 @@ Veri akışı: tüm yüklemeler `@st.cache_data` ile önbelleğe alınır (event
 - [x] **Event study** — `t-1..t+3` pencere, sabit ortalama baseline, AR/CAR + istatistiksel anlamlılık
 - [x] **Türkçe sentiment skorlama** — BERT ile her bildirime polarite (savasy modeli, null-result: domain mismatch tespit edildi)
 - [x] **Streamlit dashboard** — fiyat + KAP timeline + sentiment + event study tek sayfada
-- [ ] **Domain-specific sentiment** — disclosure_category bazlı kural seti veya finansal Türkçe fine-tune'lu model
+- [x] **Kural-bazlı sentiment** — KAP subject taksonomisine dayalı deterministik sınıflandırma (BERT vs Rule karşılaştırma; Cohen's kappa = −0.007)
 
 ## Test Durumu
 
 ```
-35 passed in ~4s
+47 passed in ~1.3s
 - tests/test_price_fetcher.py  (4 test)
 - tests/test_kap_scraper.py    (6 test)
 - tests/test_loaders.py        (6 test)
 - tests/test_event_study.py    (10 test)
 - tests/test_sentiment.py      (9 test, model mock'lu)
+- tests/test_rule_sentiment.py (12 test, saf fonksiyon)
 ```
 
 ## Lisans

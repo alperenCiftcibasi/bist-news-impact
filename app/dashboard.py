@@ -70,13 +70,16 @@ ok = results[results["status"] == "ok"].merge(
     on=["event_idx", "ticker"], how="left", validate="one_to_one",
 )
 if not sentiment.empty:
-    ok = ok.merge(
-        sentiment[["ticker", "disclosure_index", "sentiment_label", "sentiment_score"]],
-        on=["ticker", "disclosure_index"], how="left",
-    )
+    sent_cols = ["ticker", "disclosure_index", "sentiment_label", "sentiment_score"]
+    if "rule_label" in sentiment.columns:
+        sent_cols.append("rule_label")
+    ok = ok.merge(sentiment[sent_cols], on=["ticker", "disclosure_index"], how="left")
+    if "rule_label" not in ok.columns:
+        ok["rule_label"] = "n/a"
 else:
     ok["sentiment_label"] = "n/a"
     ok["sentiment_score"] = np.nan
+    ok["rule_label"] = "n/a"
 
 ok["event_date"] = pd.to_datetime(ok["event_time"]).dt.date
 ok["mapped_date"] = pd.to_datetime(ok["mapped_bar"]).dt.date
@@ -92,6 +95,13 @@ st.caption(
 # --- Sidebar filtreleri
 st.sidebar.header("Filtreler")
 ticker = st.sidebar.selectbox("Hisse", list(TICKERS), index=0)
+label_source = st.sidebar.radio(
+    "Sentiment kaynagi",
+    options=["BERT (savasy)", "Rule (subject-based)"],
+    index=1, horizontal=False,
+    help="BERT: genel-amacli Turkce sentiment (savasy). Rule: KAP subject taksonomisine dayali deterministik siniflandirma.",
+)
+label_col = "sentiment_label" if label_source.startswith("BERT") else "rule_label"
 
 ticker_news = ok[ok["ticker"] == ticker].copy()
 ticker_prices = prices[ticker].copy()
@@ -108,22 +118,23 @@ else:
 
 sentiment_filter = st.sidebar.multiselect(
     "Sentiment label",
-    options=sorted(ticker_news["sentiment_label"].dropna().unique().tolist()),
-    default=sorted(ticker_news["sentiment_label"].dropna().unique().tolist()),
+    options=sorted(ticker_news[label_col].dropna().unique().tolist()),
+    default=sorted(ticker_news[label_col].dropna().unique().tolist()),
 )
 
 st.sidebar.divider()
 st.sidebar.caption(
     "**Event window:** t-1..t+3 (5 saatlik bar)  \n"
     "**Baseline:** sabit ortalama (60-bar tahmin penceresi)  \n"
-    "**Sentiment:** savasy/bert-base-turkish-sentiment-cased"
+    "**BERT:** savasy/bert-base-turkish-sentiment-cased  \n"
+    "**Rule:** src/analysis/rule_sentiment.py (subject + summary keyword'leri)"
 )
 
 # --- Filtre uygula
 mask = (
     (ticker_news["event_time"].dt.date >= start)
     & (ticker_news["event_time"].dt.date <= end)
-    & (ticker_news["sentiment_label"].isin(sentiment_filter))
+    & (ticker_news[label_col].isin(sentiment_filter))
 )
 fdf = ticker_news[mask].copy()
 
@@ -137,8 +148,8 @@ if len(fdf):
     c2.metric("Ort. CAR", f"{fdf['car'].mean() * 100:+.2f}%")
     c3.metric("Pozitif CAR orani", f"{(fdf['car'] > 0).mean() * 100:.0f}%")
     if not sentiment.empty:
-        pos_share = (fdf["sentiment_label"] == "positive").mean() * 100
-        c4.metric("Pozitif sentiment %", f"{pos_share:.0f}%")
+        pos_share = (fdf[label_col] == "positive").mean() * 100
+        c4.metric(f"Pozitif {label_source.split()[0]} %", f"{pos_share:.0f}%")
     else:
         c4.metric("Sentiment", "n/a")
 else:
@@ -159,8 +170,8 @@ fig.add_trace(go.Scatter(
 
 if len(fdf):
     color_map = {"positive": "#2ca02c", "negative": "#d62728", "neutral": "#888888", "n/a": "#888888"}
-    for label in fdf["sentiment_label"].dropna().unique():
-        sub = fdf[fdf["sentiment_label"] == label]
+    for label in fdf[label_col].dropna().unique():
+        sub = fdf[fdf[label_col] == label]
         # Hizalı price'i markera koy (event_time'a en yakin bar Close)
         marker_prices = [
             fprices["Close"].asof(pd.Timestamp(t)) if pd.Timestamp(t) in fprices.index or len(fprices) else np.nan
@@ -179,14 +190,15 @@ if len(fdf):
         hover_text = [
             f"<b>{r['event_time']:%Y-%m-%d %H:%M}</b><br>"
             f"CAR: {r['car']*100:+.2f}%<br>"
-            f"Sentiment: {r['sentiment_label']} ({r['sentiment_score']:.2f})<br>"
+            f"BERT: {r.get('sentiment_label', 'n/a')}<br>"
+            f"Rule: {r.get('rule_label', 'n/a')}<br>"
             f"Subject: {r['subject'][:80] if isinstance(r['subject'], str) else ''}<br>"
             f"Summary: {(r['summary'] or '')[:120]}"
             for _, r in sub.iterrows()
         ]
         fig.add_trace(go.Scatter(
             x=sub["event_time"], y=marker_prices,
-            mode="markers", name=f"KAP — {label}",
+            mode="markers", name=f"{label_source.split()[0]} — {label}",
             marker=dict(color=color_map.get(label, "#888"), size=9, symbol="circle",
                         line=dict(width=1, color="white")),
             hovertext=hover_text, hoverinfo="text",
@@ -210,8 +222,8 @@ with col_left:
         fig_h = px.histogram(
             fdf.assign(car_pct=fdf["car"] * 100),
             x="car_pct", nbins=20,
-            color="sentiment_label" if not sentiment.empty else None,
-            color_discrete_map={"positive": "#2ca02c", "negative": "#d62728"},
+            color=label_col if not sentiment.empty else None,
+            color_discrete_map={"positive": "#2ca02c", "negative": "#d62728", "neutral": "#888888"},
         )
         fig_h.update_layout(
             height=320, margin=dict(l=10, r=10, t=10, b=10),
@@ -226,17 +238,17 @@ with col_left:
 with col_right:
     st.subheader("Olay Tablosu")
     if len(fdf):
-        show = fdf[["event_time", "sentiment_label", "sentiment_score", "car", "timing", "subject", "summary"]].copy()
+        show = fdf[["event_time", "sentiment_label", "rule_label", "car", "timing", "subject", "summary"]].copy()
         show["event_time"] = pd.to_datetime(show["event_time"]).dt.strftime("%Y-%m-%d %H:%M")
         show["car_pct"] = (show["car"] * 100).round(3)
         show = show.drop(columns=["car"]).sort_values("event_time", ascending=False)
-        show = show[["event_time", "sentiment_label", "sentiment_score", "car_pct", "timing", "subject", "summary"]]
+        show = show[["event_time", "sentiment_label", "rule_label", "car_pct", "timing", "subject", "summary"]]
         st.dataframe(
             show, hide_index=True, use_container_width=True, height=320,
             column_config={
                 "event_time": st.column_config.TextColumn("Tarih"),
-                "sentiment_label": st.column_config.TextColumn("Sentiment"),
-                "sentiment_score": st.column_config.NumberColumn("Skor", format="%.3f"),
+                "sentiment_label": st.column_config.TextColumn("BERT"),
+                "rule_label": st.column_config.TextColumn("Rule"),
                 "car_pct": st.column_config.NumberColumn("CAR %", format="%+.2f"),
                 "timing": st.column_config.TextColumn("Timing"),
                 "subject": st.column_config.TextColumn("Konu"),
@@ -249,9 +261,9 @@ with col_right:
 st.divider()
 
 # --- 3. Aynı-gun vs Ertesi-gun 2x2
-st.subheader("🕐 Aynı-gun vs Ertesi-gun — Sentiment x Timing")
+st.subheader(f"🕐 Aynı-gun vs Ertesi-gun — {label_source.split()[0]} x Timing")
 if len(fdf) and not sentiment.empty:
-    grid = fdf.groupby(["sentiment_label", "timing"])["car"].agg(["count", "mean"])
+    grid = fdf.groupby([label_col, "timing"])["car"].agg(["count", "mean"])
     grid["mean_pct"] = grid["mean"] * 100
     pivot = grid["mean_pct"].unstack(fill_value=np.nan)
     counts = grid["count"].unstack(fill_value=0)
@@ -275,10 +287,16 @@ if len(fdf) and not sentiment.empty:
     ))
     fig_g.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig_g, use_container_width=True)
-    st.caption(
-        "Hatirlatma: tum-olay seviyesinde **negatif × ertesi-gun** hucresi en yuksek ortalama CAR'a "
-        "(+0.93%) sahipti. Sentiment etiketi CAR'i predict etmiyor; timing baskin faktor."
-    )
+    if label_col == "rule_label":
+        st.caption(
+            "Tum-veri bulgusu: **rule pos × ertesi-gun** alt-grubu n=10, 9/10 pozitif (sign test p=0.02). "
+            "Welch t-test marjinal (p=0.26); ornek kucuk ama yon tutarli."
+        )
+    else:
+        st.caption(
+            "Tum-veri bulgusu: **negatif × ertesi-gun** hucresi en yuksek ortalama CAR'a "
+            "(+0.93%) sahipti. BERT sentiment CAR'i predict etmiyor; timing baskin faktor."
+        )
 elif sentiment.empty:
     st.info("Sentiment verisi yok (`python -m scripts.score_sentiment` ile uretin).")
 else:
